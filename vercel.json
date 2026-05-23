@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/",
+      "destination": "/hand_gesture_particle_control.html"
+    }
+  ]
+}

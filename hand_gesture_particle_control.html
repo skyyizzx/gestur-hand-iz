@@ -1,0 +1,353 @@
+
+<h2 class="sr-only">Hand Gesture Particle Control — use your webcam to control particles with hand gestures</h2>
+<style>
+  #hgpc { position: relative; width: 100%; background: #0a0a0f; border-radius: 12px; overflow: hidden; font-family: monospace; }
+  #canvas-container { position: relative; width: 100%; aspect-ratio: 16/9; }
+  #particleCanvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+  #videoEl { position: absolute; top: 8px; left: 8px; width: 160px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.15); opacity: 0.85; transform: scaleX(-1); }
+  #handCanvas { position: absolute; top: 8px; left: 8px; width: 160px; height: 90px; border-radius: 8px; }
+  #ui { position: absolute; top: 8px; right: 8px; display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
+  .badge { background: rgba(0,0,0,0.6); border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; padding: 4px 10px; font-size: 11px; color: #aaa; white-space: nowrap; }
+  .badge span { color: #fff; font-weight: 700; }
+  #gesture-badge { background: rgba(0,0,0,0.7); border: 1px solid rgba(255,255,255,0.18); border-radius: 8px; padding: 6px 12px; font-size: 12px; color: #ccc; }
+  #gesture-badge .gname { color: #00e5ff; font-size: 14px; font-weight: 700; }
+  #controls { display: flex; gap: 8px; padding: 8px 12px; background: rgba(255,255,255,0.04); border-top: 1px solid rgba(255,255,255,0.08); align-items: center; flex-wrap: wrap; }
+  #startBtn { background: #00e5ff22; border: 1px solid #00e5ff66; color: #00e5ff; border-radius: 6px; padding: 6px 16px; font-size: 13px; cursor: pointer; font-family: monospace; transition: all 0.2s; }
+  #startBtn:hover { background: #00e5ff33; }
+  #startBtn:disabled { opacity: 0.4; cursor: default; }
+  .legend { display: flex; gap: 12px; flex-wrap: wrap; }
+  .litem { display: flex; align-items: center; gap: 5px; font-size: 11px; color: #888; }
+  .ldot { width: 8px; height: 8px; border-radius: 50%; }
+  #status { font-size: 11px; color: #555; margin-left: auto; }
+</style>
+<div id="hgpc">
+  <div id="canvas-container">
+    <canvas id="particleCanvas"></canvas>
+    <video id="videoEl" autoplay muted playsinline></video>
+    <canvas id="handCanvas"></canvas>
+    <div id="ui">
+      <div id="gesture-badge"><div class="gname" id="gestureName">No hand</div><div id="gestureDesc" style="font-size:10px;color:#666">show your hand</div></div>
+      <div class="badge">particles: <span id="pcount">0</span></div>
+      <div class="badge">mode: <span id="modeLabel">idle</span></div>
+    </div>
+  </div>
+  <div id="controls">
+    <button id="startBtn" onclick="startCamera()">▶ Start Camera</button>
+    <div class="legend">
+      <div class="litem"><div class="ldot" style="background:#ff6b35"></div>Open hand → explode</div>
+      <div class="litem"><div class="ldot" style="background:#00e5ff"></div>Peace ✌ → I LOVE YOU text</div>
+      <div class="litem"><div class="ldot" style="background:#a855f7"></div>Fist → vortex</div>
+      <div class="litem"><div class="ldot" style="background:#22c55e"></div>Point → attract</div>
+    </div>
+    <div id="status">camera off</div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/hands.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1640029074/camera_utils.js"></script>
+<script>
+const pCanvas = document.getElementById('particleCanvas');
+const ctx = pCanvas.getContext('2d');
+const hCanvas = document.getElementById('handCanvas');
+const hCtx = hCanvas.getContext('2d');
+const video = document.getElementById('videoEl');
+const statusEl = document.getElementById('status');
+
+let W = 0, H = 0;
+let particles = [];
+let handPos = null;
+let currentGesture = 'none';
+let animId = null;
+let cameraStarted = false;
+let textParticles = [];
+let mode = 'idle';
+
+function resize() {
+  const container = document.getElementById('canvas-container');
+  W = container.offsetWidth;
+  H = container.offsetHeight;
+  pCanvas.width = W;
+  pCanvas.height = H;
+}
+
+class Particle {
+  constructor(x, y, color, type) {
+    this.x = x ?? Math.random() * W;
+    this.y = y ?? Math.random() * H;
+    this.ox = this.x;
+    this.oy = this.y;
+    this.vx = (Math.random() - 0.5) * 2;
+    this.vy = (Math.random() - 0.5) * 2;
+    this.size = Math.random() * 3 + 1;
+    this.color = color ?? `hsl(${Math.random()*360},80%,60%)`;
+    this.alpha = Math.random() * 0.8 + 0.2;
+    this.life = 1;
+    this.type = type ?? 'normal';
+    this.targetX = null;
+    this.targetY = null;
+  }
+
+  update() {
+    const g = currentGesture;
+    if (g === 'open' || mode === 'explode') {
+      if (handPos) {
+        const dx = this.x - handPos.x * W;
+        const dy = this.y - handPos.y * H;
+        const d = Math.sqrt(dx*dx + dy*dy) + 1;
+        const f = 800 / (d * d);
+        this.vx += (dx / d) * f;
+        this.vy += (dy / d) * f;
+      }
+      this.vx *= 0.96;
+      this.vy *= 0.96;
+    } else if (g === 'fist' || mode === 'vortex') {
+      if (handPos) {
+        const cx = handPos.x * W;
+        const cy = handPos.y * H;
+        const dx = this.x - cx;
+        const dy = this.y - cy;
+        const d = Math.sqrt(dx*dx + dy*dy) + 1;
+        this.vx += (-dy / d) * 3 - dx * 0.01;
+        this.vy += (dx / d) * 3 - dy * 0.01;
+      }
+      this.vx *= 0.95;
+      this.vy *= 0.95;
+    } else if (g === 'point') {
+      if (handPos) {
+        const dx = handPos.x * W - this.x;
+        const dy = handPos.y * H - this.y;
+        const d = Math.sqrt(dx*dx + dy*dy) + 1;
+        this.vx += (dx / d) * 1.5;
+        this.vy += (dy / d) * 1.5;
+      }
+      this.vx *= 0.93;
+      this.vy *= 0.93;
+    } else if (g === 'peace') {
+      if (this.targetX !== null) {
+        const dx = this.targetX - this.x;
+        const dy = this.targetY - this.y;
+        this.vx += dx * 0.08;
+        this.vy += dy * 0.08;
+        this.vx *= 0.8;
+        this.vy *= 0.8;
+      } else {
+        this.vx *= 0.95;
+        this.vy *= 0.95;
+      }
+    } else {
+      const dx = this.ox - this.x;
+      const dy = this.oy - this.y;
+      this.vx += dx * 0.02;
+      this.vy += dy * 0.02;
+      this.vx *= 0.92;
+      this.vy *= 0.92;
+    }
+    this.x += this.vx;
+    this.y += this.vy;
+    this.x = Math.max(0, Math.min(W, this.x));
+    this.y = Math.max(0, Math.min(H, this.y));
+  }
+
+  draw() {
+    ctx.globalAlpha = this.alpha;
+    ctx.fillStyle = this.color;
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function spawnParticles(n) {
+  const colors = ['#ff6b35','#ff9500','#ffd60a','#00e5ff','#a855f7','#22c55e','#f72585'];
+  for (let i = 0; i < n; i++) {
+    const c = colors[Math.floor(Math.random() * colors.length)];
+    particles.push(new Particle(null, null, c));
+  }
+}
+
+function getTextPoints(text, x0, y0, size) {
+  const offscreen = document.createElement('canvas');
+  offscreen.width = W;
+  offscreen.height = H;
+  const oc = offscreen.getContext('2d');
+  oc.fillStyle = '#fff';
+  oc.font = `bold ${size}px monospace`;
+  oc.textAlign = 'center';
+  oc.fillText(text, x0, y0);
+  const data = oc.getImageData(0, 0, W, H).data;
+  const pts = [];
+  const step = 5;
+  for (let py = 0; py < H; py += step) {
+    for (let px = 0; px < W; px += step) {
+      const idx = (py * W + px) * 4;
+      if (data[idx + 3] > 128) pts.push({x: px, y: py});
+    }
+  }
+  return pts;
+}
+
+function assignTextTargets() {
+  const pts = getTextPoints('I LOVE YOU', W / 2, H / 2 + 20, Math.floor(H * 0.18));
+  for (let i = 0; i < particles.length; i++) {
+    if (i < pts.length) {
+      particles[i].targetX = pts[i].x;
+      particles[i].targetY = pts[i].y;
+      particles[i].color = `hsl(${180 + Math.random()*40},100%,${55+Math.random()*20}%)`;
+    } else {
+      particles[i].targetX = null;
+      particles[i].targetY = null;
+    }
+  }
+}
+
+function clearTargets() {
+  particles.forEach(p => { p.targetX = null; p.targetY = null; });
+}
+
+let lastGesture = 'none';
+
+function loop() {
+  ctx.fillStyle = 'rgba(10,10,15,0.18)';
+  ctx.fillRect(0, 0, W, H);
+
+  for (const p of particles) { p.update(); p.draw(); }
+  ctx.globalAlpha = 1;
+
+  if (currentGesture !== lastGesture) {
+    if (currentGesture === 'peace') assignTextTargets();
+    else clearTargets();
+    lastGesture = currentGesture;
+  }
+
+  document.getElementById('pcount').textContent = particles.length;
+  animId = requestAnimationFrame(loop);
+}
+
+function classifyGesture(lm) {
+  const tips = [8, 12, 16, 20];
+  const mcp  = [6, 10, 14, 18];
+  const extended = tips.map((t, i) => lm[t].y < lm[mcp[i]].y);
+  const thumbOut = lm[4].x < lm[3].x;
+  const numExt = extended.filter(Boolean).length;
+  const thumbExt = Math.abs(lm[4].x - lm[3].x) > 0.05;
+
+  if (numExt === 4 && thumbExt) return 'open';
+  if (numExt === 0) return 'fist';
+  if (extended[0] && extended[1] && !extended[2] && !extended[3]) return 'peace';
+  if (extended[0] && !extended[1] && !extended[2] && !extended[3]) return 'point';
+  return 'open';
+}
+
+const gestureLabels = {
+  open: ['Open hand 🖐', 'particle explosion'],
+  fist: ['Fist ✊', 'vortex spin'],
+  peace: ['Peace ✌', 'I LOVE YOU text'],
+  point: ['Point ☝', 'attract particles'],
+  none: ['No hand', 'show your hand']
+};
+
+function drawLandmarks(lms, w, h) {
+  hCtx.clearRect(0, 0, 160, 90);
+  const scx = 160 / w;
+  const scy = 90 / h;
+  const conn = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+  hCtx.strokeStyle = 'rgba(255,255,255,0.5)';
+  hCtx.lineWidth = 1;
+  for (const [a, b] of conn) {
+    hCtx.beginPath();
+    hCtx.moveTo((1 - lms[a].x) * 160, lms[a].y * 90);
+    hCtx.lineTo((1 - lms[b].x) * 160, lms[b].y * 90);
+    hCtx.stroke();
+  }
+  for (const lm of lms) {
+    hCtx.fillStyle = '#00e5ff';
+    hCtx.beginPath();
+    hCtx.arc((1 - lm.x) * 160, lm.y * 90, 2, 0, Math.PI * 2);
+    hCtx.fill();
+  }
+}
+
+async function startCamera() {
+  if (cameraStarted) return;
+  const btn = document.getElementById('startBtn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Loading...';
+  statusEl.textContent = 'starting...';
+
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({video: {width:320, height:180, facingMode:'user'}});
+    video.srcObject = stream;
+    await video.play();
+    cameraStarted = true;
+    statusEl.textContent = 'camera on';
+    btn.textContent = '✓ Camera On';
+
+    resize();
+    spawnParticles(500);
+    loop();
+
+    if (typeof Hands !== 'undefined') {
+      const hands = new Hands({locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/${f}`});
+      hands.setOptions({maxNumHands: 1, modelComplexity: 0, minDetectionConfidence: 0.6, minTrackingConfidence: 0.5});
+      hands.onResults(results => {
+        if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+          const lm = results.multiHandLandmarks[0];
+          const cx = 1 - lm[9].x;
+          const cy = lm[9].y;
+          handPos = {x: cx, y: cy};
+          currentGesture = classifyGesture(lm);
+          drawLandmarks(lm, video.videoWidth, video.videoHeight);
+          const gl = gestureLabels[currentGesture];
+          document.getElementById('gestureName').textContent = gl[0];
+          document.getElementById('gestureDesc').textContent = gl[1];
+          document.getElementById('modeLabel').textContent = currentGesture;
+        } else {
+          handPos = null;
+          currentGesture = 'none';
+          hCtx.clearRect(0, 0, 160, 90);
+          document.getElementById('gestureName').textContent = 'No hand';
+          document.getElementById('gestureDesc').textContent = 'show your hand';
+          document.getElementById('modeLabel').textContent = 'idle';
+        }
+      });
+
+      const camera = new Camera(video, {
+        onFrame: async () => { await hands.send({image: video}); },
+        width: 320, height: 180
+      });
+      camera.start();
+    } else {
+      statusEl.textContent = 'MediaPipe failed to load';
+      simulateMode();
+    }
+  } catch(e) {
+    btn.disabled = false;
+    btn.textContent = '▶ Start Camera';
+    statusEl.textContent = 'camera denied';
+    resize();
+    spawnParticles(500);
+    simulateMode();
+    loop();
+  }
+}
+
+function simulateMode() {
+  statusEl.textContent = 'demo mode (no camera)';
+  const modes = ['open','fist','peace','point','none'];
+  let mi = 0;
+  setInterval(() => {
+    mi = (mi + 1) % modes.length;
+    currentGesture = modes[mi];
+    handPos = {x: 0.4 + Math.random()*0.2, y: 0.4 + Math.random()*0.2};
+    const gl = gestureLabels[currentGesture];
+    document.getElementById('gestureName').textContent = gl[0];
+    document.getElementById('gestureDesc').textContent = gl[1];
+    document.getElementById('modeLabel').textContent = currentGesture;
+  }, 2500);
+}
+
+window.addEventListener('resize', () => { resize(); });
+resize();
+spawnParticles(500);
+loop();
+</script>
