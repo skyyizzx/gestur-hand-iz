@@ -1,0 +1,421 @@
+
+<h2 class="sr-only">Hand Gesture Particle Control v3 — partikel bersih membentuk tulisan</h2>
+<style>
+#wrap{background:#06060f;border-radius:12px;overflow:hidden;font-family:monospace;width:100%}
+#cvs-wrap{position:relative;width:100%;aspect-ratio:16/9}
+#pCvs{position:absolute;top:0;left:0;width:100%;height:100%}
+#vid{position:absolute;top:8px;left:8px;width:140px;border-radius:8px;border:1px solid rgba(255,255,255,0.12);opacity:0.75;transform:scaleX(-1)}
+#hCvs{position:absolute;top:8px;left:8px;width:140px;height:78px;border-radius:8px;pointer-events:none}
+#hud{position:absolute;top:8px;right:8px;display:flex;flex-direction:column;gap:4px;align-items:flex-end}
+.hb{background:rgba(0,0,0,0.7);border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:3px 9px;font-size:10px;color:#888}
+.hb b{color:#eee}
+#gbox{background:rgba(0,0,0,0.8);border:1px solid rgba(255,255,255,0.18);border-radius:8px;padding:6px 12px;text-align:right;max-width:200px}
+#gname{font-size:12px;font-weight:700;color:#00e5ff}
+#gdesc{font-size:9px;color:#555;margin-top:1px}
+#bar{display:flex;gap:6px;padding:7px 10px;background:rgba(255,255,255,0.03);border-top:1px solid rgba(255,255,255,0.07);align-items:center;flex-wrap:wrap}
+#startBtn{background:#00e5ff15;border:1px solid #00e5ff44;color:#00e5ff;border-radius:5px;padding:4px 12px;font-size:11px;cursor:pointer;font-family:monospace}
+#startBtn:hover{background:#00e5ff25}
+#startBtn:disabled{opacity:0.4;cursor:default}
+.leg{display:flex;gap:8px;flex-wrap:wrap}
+.li{display:flex;align-items:center;gap:3px;font-size:9px;color:#666}
+.ld{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+#st{font-size:9px;color:#333;margin-left:auto}
+</style>
+<div id="wrap">
+  <div id="cvs-wrap">
+    <canvas id="pCvs"></canvas>
+    <video id="vid" autoplay muted playsinline></video>
+    <canvas id="hCvs"></canvas>
+    <div id="hud">
+      <div id="gbox">
+        <div id="gname">Belum ada tangan</div>
+        <div id="gdesc">tunjukkan tanganmu</div>
+      </div>
+      <div class="hb">partikel: <b id="pcnt">0</b></div>
+      <div class="hb">gesture: <b id="gmod">idle</b></div>
+      <div class="hb">wajah: <b id="fmod">-</b></div>
+    </div>
+  </div>
+  <div id="bar">
+    <button id="startBtn" onclick="startCam()">Mulai Kamera</button>
+    <div class="leg">
+      <div class="li"><div class="ld" style="background:#ff6b35"></div>Open = ledak</div>
+      <div class="li"><div class="ld" style="background:#a855f7"></div>Fist = vortex</div>
+      <div class="li"><div class="ld" style="background:#00e5ff"></div>Peace = I LOVE YOU</div>
+      <div class="li"><div class="ld" style="background:#22c55e"></div>Point = tarik</div>
+      <div class="li"><div class="ld" style="background:#f72585"></div>Kelingking = INANG</div>
+      <div class="li"><div class="ld" style="background:#ffd60a"></div>N = NURU MUTMAINNAH</div>
+      <div class="li"><div class="ld" style="background:#00ff88"></div>O = ODGJ WKWKWK</div>
+      <div class="li"><div class="ld" style="background:#ff69b4"></div>Senyum = SEMOGA...</div>
+    </div>
+    <div id="st">kamera mati</div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/hands.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1640029074/camera_utils.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/face_mesh.js"></script>
+<script>
+const pCvs=document.getElementById('pCvs');
+const ctx=pCvs.getContext('2d');
+const hCvs=document.getElementById('hCvs');
+const hCtx=hCvs.getContext('2d');
+const vid=document.getElementById('vid');
+const stEl=document.getElementById('st');
+
+let W=0,H=0,particles=[],handPos=null,handAngle=0,gesture='none',camOn=false;
+let lastGesture='none',textMode=false,currentAngle=0;
+
+function resize(){
+  const c=document.getElementById('cvs-wrap');
+  W=c.offsetWidth; H=c.offsetHeight;
+  pCvs.width=W; pCvs.height=H;
+}
+
+const TOTAL=700;
+
+class Particle{
+  constructor(){
+    this.reset();
+    this.x=Math.random()*W;
+    this.y=Math.random()*H;
+  }
+  reset(){
+    this.x=Math.random()*W;
+    this.y=Math.random()*H;
+    this.vx=(Math.random()-0.5)*1.5;
+    this.vy=(Math.random()-0.5)*1.5;
+    this.sz=Math.random()*1.5+0.5;
+    this.col='rgba(255,255,255,0.0)';
+    this.alpha=0;
+    this.tx=null; this.ty=null;
+    this.tcol='#fff';
+    this.scatterX=Math.random()*W;
+    this.scatterY=Math.random()*H;
+    this.hasTarget=false;
+  }
+  update(g){
+    if(this.hasTarget&&this.tx!==null){
+      const dx=this.tx-this.x, dy=this.ty-this.y;
+      this.vx+=dx*0.12;
+      this.vy+=dy*0.12;
+      this.vx*=0.72;
+      this.vy*=0.72;
+      this.alpha=Math.min(1,this.alpha+0.04);
+    }else if(g==='open'){
+      if(handPos){
+        const dx=this.x-handPos.x*W, dy=this.y-handPos.y*H;
+        const d=Math.sqrt(dx*dx+dy*dy)+1;
+        const f=1200/(d*d);
+        this.vx+=(dx/d)*f; this.vy+=(dy/d)*f;
+      }
+      this.vx*=0.94; this.vy*=0.94;
+      this.alpha=Math.min(0.7,this.alpha+0.02);
+    }else if(g==='fist'){
+      if(handPos){
+        const cx=handPos.x*W, cy=handPos.y*H;
+        const dx=this.x-cx, dy=this.y-cy;
+        const d=Math.sqrt(dx*dx+dy*dy)+1;
+        this.vx+=(-dy/d)*3.5-dx*0.008;
+        this.vy+=(dx/d)*3.5-dy*0.008;
+      }
+      this.vx*=0.94; this.vy*=0.94;
+      this.alpha=Math.min(0.6,this.alpha+0.02);
+    }else if(g==='point'){
+      if(handPos){
+        const dx=handPos.x*W-this.x, dy=handPos.y*H-this.y;
+        const d=Math.sqrt(dx*dx+dy*dy)+1;
+        this.vx+=(dx/d)*2; this.vy+=(dy/d)*2;
+      }
+      this.vx*=0.92; this.vy*=0.92;
+      this.alpha=Math.min(0.6,this.alpha+0.02);
+    }else{
+      this.vx*=0.95; this.vy*=0.95;
+      this.vx+=(Math.random()-0.5)*0.1;
+      this.vy+=(Math.random()-0.5)*0.1;
+      this.alpha=Math.max(0,this.alpha-0.03);
+    }
+    this.x+=this.vx; this.y+=this.vy;
+    this.x=Math.max(-10,Math.min(W+10,this.x));
+    this.y=Math.max(-10,Math.min(H+10,this.y));
+  }
+  draw(){
+    if(this.alpha<=0.01) return;
+    ctx.globalAlpha=this.alpha;
+    ctx.fillStyle=this.col;
+    ctx.beginPath();
+    ctx.arc(this.x,this.y,this.sz,0,Math.PI*2);
+    ctx.fill();
+  }
+}
+
+function initParticles(){
+  particles=[];
+  for(let i=0;i<TOTAL;i++) particles.push(new Particle());
+}
+
+function getTextPts(text,angle,fontSize){
+  const off=document.createElement('canvas');
+  off.width=W; off.height=H;
+  const oc=off.getContext('2d');
+  oc.clearRect(0,0,W,H);
+  oc.save();
+  oc.translate(W/2,H/2);
+  oc.rotate(angle);
+  const fs=fontSize||Math.min(Math.floor(H*0.14),Math.floor(W/text.length*1.1));
+  oc.font=`bold ${fs}px monospace`;
+  oc.textAlign='center';
+  oc.textBaseline='middle';
+  oc.fillStyle='#fff';
+  oc.fillText(text,0,0);
+  oc.restore();
+  const data=oc.getImageData(0,0,W,H).data;
+  const pts=[];
+  const step=5;
+  for(let py=step;py<H-step;py+=step){
+    for(let px=step;px<W-step;px+=step){
+      const idx=(py*W+px)*4;
+      if(data[idx+3]>140) pts.push({x:px,y:py});
+    }
+  }
+  return pts;
+}
+
+function shuffle(arr){
+  for(let i=arr.length-1;i>0;i--){
+    const j=Math.floor(Math.random()*(i+1));
+    [arr[i],arr[j]]=[arr[j],arr[i]];
+  }
+  return arr;
+}
+
+function assignText(text,angle,colorFn,fontSize){
+  const pts=shuffle(getTextPts(text,angle,fontSize));
+  textMode=true;
+  currentAngle=angle;
+
+  let needed=Math.min(pts.length,TOTAL);
+  let extra=TOTAL-needed;
+
+  for(let i=0;i<TOTAL;i++){
+    if(i<needed){
+      particles[i].tx=pts[i].x;
+      particles[i].ty=pts[i].y;
+      particles[i].hasTarget=true;
+      particles[i].col=colorFn(i);
+      particles[i].sz=Math.random()*1.2+0.4;
+    }else{
+      particles[i].tx=null;
+      particles[i].ty=null;
+      particles[i].hasTarget=false;
+      particles[i].col='rgba(0,0,0,0)';
+      particles[i].alpha=0;
+      particles[i].vx=(Math.random()-0.5)*0.5;
+      particles[i].vy=(Math.random()-0.5)*0.5;
+    }
+  }
+}
+
+function clearText(){
+  textMode=false;
+  particles.forEach(p=>{
+    p.tx=null; p.ty=null; p.hasTarget=false;
+    p.vx=(Math.random()-0.5)*2;
+    p.vy=(Math.random()-0.5)*2;
+  });
+}
+
+const colors={
+  peace:i=>`hsla(${185+i*0.4},100%,${60+Math.sin(i*0.3)*15}%,1)`,
+  pinky:i=>`hsla(${300+i*0.5},100%,${60+Math.sin(i*0.4)*15}%,1)`,
+  signN:i=>`hsla(${40+i*0.3},100%,${55+Math.sin(i*0.3)*15}%,1)`,
+  signO:i=>`hsla(${120+i*0.4},100%,${55+Math.sin(i*0.4)*15}%,1)`,
+  smile:i=>`hsla(${330+i*0.3},100%,${60+Math.sin(i*0.3)*15}%,1)`,
+};
+
+const gInfo={
+  open:['Open hand','partikel meledak!'],
+  fist:['Fist','vortex spin'],
+  peace:['Peace — I LOVE YOU','ikuti rotasi tangan'],
+  point:['Point','tarik partikel'],
+  pinky:['Kelingking','INANG'],
+  signN:['Isyarat N','NURU MUTMAINNAH'],
+  signO:['Isyarat O','ODGJ WKWKWK'],
+  smile:['Wajah senang','SEMOGA HARIMU MENYENANGKAN'],
+  none:['Belum ada tangan','tunjukkan tanganmu'],
+};
+
+function setGestureUI(g){
+  const gl=gInfo[g]||gInfo.none;
+  document.getElementById('gname').textContent=gl[0];
+  document.getElementById('gdesc').textContent=gl[1];
+  document.getElementById('gmod').textContent=g;
+}
+
+function classifyGesture(lm){
+  const tips=[8,12,16,20],mcp=[6,10,14,18];
+  const ext=tips.map((t,i)=>lm[t].y<lm[mcp[i]].y);
+  const thumbOpen=Math.abs(lm[4].x-lm[3].x)>0.06;
+  const [i0,i1,i2,i3]=ext;
+  const numExt=ext.filter(Boolean).length;
+
+  if(!i0&&!i1&&!i2&&i3&&!thumbOpen) return 'pinky';
+
+  const distThumbIdx=Math.hypot(lm[4].x-lm[8].x,lm[4].y-lm[8].y);
+  if(distThumbIdx<0.07&&!i1&&!i2&&!i3) return 'signO';
+  if(!i0&&!i1&&i2&&i3&&thumbOpen) return 'signO';
+
+  if(i0&&!i1&&!i2&&i3&&!thumbOpen) return 'signN';
+
+  if(numExt===0) return 'fist';
+  if(i0&&!i1&&!i2&&!i3) return 'point';
+  if(i0&&i1&&!i2&&!i3) return 'peace';
+  if(numExt>=3&&thumbOpen) return 'open';
+  return 'open';
+}
+
+function getHandAngle(lm){
+  return Math.atan2(lm[9].y-lm[0].y,(1-lm[9].x)-(1-lm[0].x));
+}
+
+function drawLM(lm){
+  hCtx.clearRect(0,0,140,78);
+  const conn=[[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+  hCtx.strokeStyle='rgba(0,229,255,0.5)';
+  hCtx.lineWidth=1;
+  for(const [a,b] of conn){
+    hCtx.beginPath();
+    hCtx.moveTo((1-lm[a].x)*140,lm[a].y*78);
+    hCtx.lineTo((1-lm[b].x)*140,lm[b].y*78);
+    hCtx.stroke();
+  }
+  for(const p of lm){
+    hCtx.fillStyle='#00e5ff';
+    hCtx.beginPath();
+    hCtx.arc((1-p.x)*140,p.y*78,1.8,0,Math.PI*2);
+    hCtx.fill();
+  }
+}
+
+let prevGesture='none';
+
+function loop(){
+  const g=gesture;
+  const isTextGesture=['peace','pinky','signN','signO','smile'].includes(g);
+
+  if(isTextGesture){
+    ctx.clearRect(0,0,W,H);
+  }else{
+    ctx.fillStyle='rgba(6,6,15,0.22)';
+    ctx.fillRect(0,0,W,H);
+  }
+
+  for(const p of particles){ p.update(g); p.draw(); }
+  ctx.globalAlpha=1;
+
+  if(g!==prevGesture){
+    if(isTextGesture){
+      const ang=handAngle||0;
+      if(g==='peace') assignText('I LOVE YOU',ang,colors.peace);
+      else if(g==='pinky') assignText('INANG',ang,colors.pinky);
+      else if(g==='signN') assignText('NURU MUTMAINNAH',ang,colors.signN,Math.min(Math.floor(H*0.09),Math.floor(W/16)));
+      else if(g==='signO') assignText('ODGJ WKWKWK',ang,colors.signO);
+      else if(g==='smile') assignText('SEMOGA HARIMU MENYENANGKAN',0,colors.smile,Math.min(Math.floor(H*0.08),Math.floor(W/26)));
+    }else{
+      clearText();
+    }
+    prevGesture=g;
+    setGestureUI(g);
+  }
+
+  if(isTextGesture&&g==='peace'&&handAngle!==currentAngle&&Math.abs(handAngle-currentAngle)>0.05){
+    assignText('I LOVE YOU',handAngle,colors.peace);
+    currentAngle=handAngle;
+  }
+
+  document.getElementById('pcnt').textContent=particles.filter(p=>p.hasTarget||p.alpha>0.1).length;
+  requestAnimationFrame(loop);
+}
+
+async function startCam(){
+  if(camOn)return;
+  const btn=document.getElementById('startBtn');
+  btn.disabled=true; btn.textContent='Loading...';
+  stEl.textContent='starting...';
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia({video:{width:320,height:180,facingMode:'user'}});
+    vid.srcObject=stream; await vid.play();
+    camOn=true; stEl.textContent='kamera on'; btn.textContent='Kamera On';
+    resize(); initParticles(); loop();
+    initMP();
+  }catch(e){
+    btn.disabled=false; btn.textContent='Mulai Kamera';
+    stEl.textContent='kamera ditolak — demo mode';
+    resize(); initParticles(); loop(); demoMode();
+  }
+}
+
+function initMP(){
+  if(typeof Hands==='undefined'){stEl.textContent='MediaPipe gagal';demoMode();return;}
+  const hands=new Hands({locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/${f}`});
+  hands.setOptions({maxNumHands:1,modelComplexity:0,minDetectionConfidence:0.6,minTrackingConfidence:0.5});
+  hands.onResults(r=>{
+    if(r.multiHandLandmarks&&r.multiHandLandmarks.length>0){
+      const lm=r.multiHandLandmarks[0];
+      handPos={x:1-lm[9].x,y:lm[9].y};
+      handAngle=getHandAngle(lm);
+      gesture=classifyGesture(lm);
+      drawLM(lm);
+    }else{
+      handPos=null; gesture='none';
+      hCtx.clearRect(0,0,140,78);
+    }
+  });
+
+  let faceMesh=null;
+  if(typeof FaceMesh!=='undefined'){
+    faceMesh=new FaceMesh({locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/${f}`});
+    faceMesh.setOptions({maxNumFaces:1,refineLandmarks:false,minDetectionConfidence:0.5,minTrackingConfidence:0.5});
+    faceMesh.onResults(fr=>{
+      if(fr.multiFaceLandmarks&&fr.multiFaceLandmarks.length>0){
+        const fl=fr.multiFaceLandmarks[0];
+        const mw=Math.abs(fl[291].x-fl[61].x);
+        if(mw>0.12&&gesture==='none') gesture='smile';
+        else if(mw<=0.12&&gesture==='smile') gesture='none';
+        document.getElementById('fmod').textContent=mw>0.12?'senang':'netral';
+      }else document.getElementById('fmod').textContent='-';
+    });
+  }
+
+  let fc=0;
+  const cam=new Camera(vid,{
+    onFrame:async()=>{
+      await hands.send({image:vid});
+      fc++;
+      if(faceMesh&&fc%3===0) await faceMesh.send({image:vid});
+    },
+    width:320,height:180
+  });
+  cam.start();
+}
+
+function demoMode(){
+  stEl.textContent='demo mode';
+  const seq=[
+    {g:'open',a:0},{g:'fist',a:0},{g:'peace',a:0},{g:'peace',a:0.4},
+    {g:'pinky',a:-0.3},{g:'signN',a:0.2},{g:'signO',a:-0.1},
+    {g:'smile',a:0},{g:'point',a:0},{g:'none',a:0}
+  ];
+  let i=0;
+  setInterval(()=>{
+    const s=seq[i%seq.length];
+    gesture=s.g;
+    handAngle=s.a;
+    handPos={x:0.45+Math.random()*0.1,y:0.45+Math.random()*0.1};
+    i++;
+  },3200);
+}
+
+window.addEventListener('resize',()=>{resize();});
+resize(); initParticles(); loop();
+</script>

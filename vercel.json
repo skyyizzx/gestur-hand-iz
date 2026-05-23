@@ -2,7 +2,7 @@
   "rewrites": [
     {
       "source": "/",
-      "destination": "/hand_gesture_particle_control.html"
+      "destination": "/hand_gesture_particle_v3.html"
     }
   ]
 }
