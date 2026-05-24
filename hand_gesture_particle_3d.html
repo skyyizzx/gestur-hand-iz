@@ -1,0 +1,512 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#06060f;font-family:monospace}
+#wrap{background:#06060f;border-radius:12px;overflow:hidden;width:100%}
+#cvs-wrap{position:relative;width:100%;aspect-ratio:16/9}
+#pCvs{position:absolute;top:0;left:0;width:100%;height:100%}
+#vid{position:absolute;top:8px;left:8px;width:130px;border-radius:8px;border:1px solid rgba(255,255,255,0.12);opacity:0.75;transform:scaleX(-1)}
+#hCvs{position:absolute;top:8px;left:8px;width:130px;height:73px;border-radius:8px;pointer-events:none}
+#hud{position:absolute;top:8px;right:8px;display:flex;flex-direction:column;gap:4px;align-items:flex-end}
+.hb{background:rgba(0,0,0,0.7);border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:3px 9px;font-size:10px;color:#888}
+.hb b{color:#eee}
+#gbox{background:rgba(0,0,0,0.8);border:1px solid rgba(255,255,255,0.18);border-radius:8px;padding:6px 12px;text-align:right}
+#gname{font-size:12px;font-weight:700;color:#00e5ff}
+#gdesc{font-size:9px;color:#555;margin-top:1px}
+#bar{display:flex;gap:6px;padding:7px 10px;background:rgba(255,255,255,0.03);border-top:1px solid rgba(255,255,255,0.07);align-items:center;flex-wrap:wrap}
+#startBtn{background:#00e5ff15;border:1px solid #00e5ff44;color:#00e5ff;border-radius:5px;padding:4px 12px;font-size:11px;cursor:pointer;font-family:monospace}
+#startBtn:hover{background:#00e5ff25}
+#startBtn:disabled{opacity:0.4;cursor:default}
+.leg{display:flex;gap:8px;flex-wrap:wrap}
+.li{display:flex;align-items:center;gap:3px;font-size:9px;color:#666}
+.ld{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+#st{font-size:9px;color:#333;margin-left:auto}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="cvs-wrap">
+    <canvas id="pCvs"></canvas>
+    <video id="vid" autoplay muted playsinline></video>
+    <canvas id="hCvs"></canvas>
+    <div id="hud">
+      <div id="gbox">
+        <div id="gname">Belum ada tangan</div>
+        <div id="gdesc">tunjukkan tanganmu</div>
+      </div>
+      <div class="hb">partikel: <b id="pcnt">0</b></div>
+      <div class="hb">gesture: <b id="gmod">idle</b></div>
+    </div>
+  </div>
+  <div id="bar">
+    <button id="startBtn" onclick="startCam()">Mulai Kamera</button>
+    <div class="leg">
+      <div class="li"><div class="ld" style="background:#ff6b35"></div>Open=ledak</div>
+      <div class="li"><div class="ld" style="background:#a855f7"></div>Fist=vortex</div>
+      <div class="li"><div class="ld" style="background:#00e5ff"></div>Peace=I LOVE YOU 3D</div>
+      <div class="li"><div class="ld" style="background:#22c55e"></div>Point=tarik</div>
+      <div class="li"><div class="ld" style="background:#f72585"></div>Kelingking=INANG</div>
+      <div class="li"><div class="ld" style="background:#ffd60a"></div>N=NURU MUTMAINNAH</div>
+      <div class="li"><div class="ld" style="background:#00ff88"></div>O=ODGJ WKWKWK</div>
+      <div class="li"><div class="ld" style="background:#ff69b4"></div>Senyum=SEMOGA...</div>
+    </div>
+    <div id="st">kamera mati</div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/hands.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils@0.3.1640029074/camera_utils.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/face_mesh.js"></script>
+<script>
+const pCvs=document.getElementById('pCvs');
+const ctx=pCvs.getContext('2d');
+const hCvs=document.getElementById('hCvs');
+const hCtx=hCvs.getContext('2d');
+const vid=document.getElementById('vid');
+const stEl=document.getElementById('st');
+
+let W=0,H=0,camOn=false;
+let handPos=null,handAngle=0,gesture='none',prevGesture='none';
+
+// 3D scene rotation
+let rotX=0.25, rotY=0, rotZ=0;
+let targetRotX=0.25, targetRotY=0, targetRotZ=0;
+let autoRotY=0;
+let isTextMode=false;
+let textLabel='';
+
+const DEPTH=220; // perspective depth
+const TOTAL=800;
+
+// Particle class with 3D coords
+class P3{
+  constructor(){
+    this.x=0;this.y=0;this.z=0;
+    this.vx=0;this.vy=0;this.vz=0;
+    this.tx=null;this.ty=null;this.tz=null;
+    this.hasTarget=false;
+    this.col='#fff';
+    this.alpha=0;
+    this.sz=1;
+    this.sx2d=0;this.sy2d=0;this.sz2d=1; // projected
+    this.scatter();
+  }
+  scatter(){
+    this.x=(Math.random()-0.5)*W*1.2;
+    this.y=(Math.random()-0.5)*H*1.2;
+    this.z=(Math.random()-0.5)*400;
+    this.vx=(Math.random()-0.5)*3;
+    this.vy=(Math.random()-0.5)*3;
+    this.vz=(Math.random()-0.5)*3;
+    this.sz=Math.random()*1.5+0.4;
+    this.alpha=0;
+    this.hasTarget=false;
+    this.tx=null;this.ty=null;this.tz=null;
+  }
+  update(g){
+    if(this.hasTarget&&this.tx!==null){
+      // spring to target in 3D
+      const dx=this.tx-this.x,dy=this.ty-this.y,dz=this.tz-this.z;
+      this.vx+=dx*0.10; this.vy+=dy*0.10; this.vz+=dz*0.10;
+      this.vx*=0.75; this.vy*=0.75; this.vz*=0.75;
+      this.alpha=Math.min(1,this.alpha+0.05);
+    } else if(g==='open'){
+      if(handPos){
+        const hx=(handPos.x-0.5)*W, hy=(handPos.y-0.5)*H;
+        const dx=this.x-hx, dy=this.y-hy, dz=this.z;
+        const d=Math.sqrt(dx*dx+dy*dy+dz*dz)+1;
+        const f=1400/(d*d);
+        this.vx+=(dx/d)*f; this.vy+=(dy/d)*f; this.vz+=(dz/d)*f*0.5;
+      }
+      this.vx*=0.93;this.vy*=0.93;this.vz*=0.93;
+      this.alpha=Math.min(0.8,this.alpha+0.03);
+    } else if(g==='fist'){
+      if(handPos){
+        const hx=(handPos.x-0.5)*W, hy=(handPos.y-0.5)*H;
+        const dx=this.x-hx, dy=this.y-hy;
+        const d=Math.sqrt(dx*dx+dy*dy)+1;
+        this.vx+=(-dy/d)*4-dx*0.008;
+        this.vy+=(dx/d)*4-dy*0.008;
+        this.vz+=Math.sin(Date.now()*0.002)*0.3;
+      }
+      this.vx*=0.93;this.vy*=0.93;this.vz*=0.96;
+      this.alpha=Math.min(0.7,this.alpha+0.03);
+    } else if(g==='point'){
+      if(handPos){
+        const hx=(handPos.x-0.5)*W, hy=(handPos.y-0.5)*H;
+        const dx=hx-this.x, dy=hy-this.y;
+        const d=Math.sqrt(dx*dx+dy*dy)+1;
+        this.vx+=(dx/d)*2; this.vy+=(dy/d)*2;
+      }
+      this.vx*=0.91;this.vy*=0.91;this.vz*=0.95;
+      this.alpha=Math.min(0.7,this.alpha+0.03);
+    } else {
+      this.vx*=0.97;this.vy*=0.97;this.vz*=0.97;
+      this.vx+=(Math.random()-0.5)*0.05;
+      this.vy+=(Math.random()-0.5)*0.05;
+      this.vz+=(Math.random()-0.5)*0.05;
+      this.alpha=Math.max(0,this.alpha-0.025);
+    }
+    this.x+=this.vx; this.y+=this.vy; this.z+=this.vz;
+  }
+  project(rx,ry,rz){
+    // rotate around Y then X then Z
+    let x=this.x,y=this.y,z=this.z;
+    // Rotate Y
+    let cosY=Math.cos(ry),sinY=Math.sin(ry);
+    let nx=x*cosY+z*sinY, nz=-x*sinY+z*cosY;
+    x=nx; z=nz;
+    // Rotate X
+    let cosX=Math.cos(rx),sinX=Math.sin(rx);
+    let ny=y*cosX-z*sinX, nz2=y*sinX+z*cosX;
+    y=ny; z=nz2;
+    // Rotate Z
+    let cosZ=Math.cos(rz),sinZ=Math.sin(rz);
+    let nx2=x*cosZ-y*sinZ, ny2=x*sinZ+y*cosZ;
+    x=nx2; y=ny2;
+    // Perspective
+    const fov=DEPTH/(DEPTH+z);
+    this.sx2d=x*fov+W/2;
+    this.sy2d=y*fov+H/2;
+    this.sz2d=fov;
+    this.projZ=z;
+  }
+  draw(){
+    if(this.alpha<0.01) return;
+    const s=Math.max(0.3,this.sz*this.sz2d*1.8);
+    ctx.globalAlpha=this.alpha*Math.min(1,this.sz2d*1.5);
+    ctx.fillStyle=this.col;
+    // Glow for depth effect
+    if(this.hasTarget&&this.sz2d>0.8){
+      ctx.shadowBlur=4*this.sz2d;
+      ctx.shadowColor=this.col;
+    } else {
+      ctx.shadowBlur=0;
+    }
+    ctx.beginPath();
+    ctx.arc(this.sx2d,this.sy2d,s,0,Math.PI*2);
+    ctx.fill();
+    ctx.shadowBlur=0;
+  }
+}
+
+let particles=[];
+function initParticles(){
+  particles=[];
+  for(let i=0;i<TOTAL;i++){
+    const p=new P3();
+    p.x=(Math.random()-0.5)*W*1.5;
+    p.y=(Math.random()-0.5)*H*1.5;
+    p.z=(Math.random()-0.5)*500;
+    particles.push(p);
+  }
+}
+
+function getTextPts(text,fontSize){
+  const off=document.createElement('canvas');
+  off.width=W; off.height=H;
+  const oc=off.getContext('2d');
+  oc.clearRect(0,0,W,H);
+  const fs=fontSize||Math.min(Math.floor(H*0.22),Math.floor(W/(text.length*0.65)));
+  oc.font=`900 ${fs}px Arial Black,monospace`;
+  oc.textAlign='center';
+  oc.textBaseline='middle';
+  oc.fillStyle='#fff';
+  oc.fillText(text,W/2,H/2);
+  const data=oc.getImageData(0,0,W,H).data;
+  const pts=[];
+  const step=5;
+  for(let py=step;py<H-step;py+=step){
+    for(let px=step;px<W-step;px+=step){
+      const idx=(py*W+px)*4;
+      if(data[idx+3]>140) pts.push({x:px-W/2,y:py-H/2});
+    }
+  }
+  return pts;
+}
+
+function shuffle(arr){
+  for(let i=arr.length-1;i>0;i--){
+    const j=Math.floor(Math.random()*(i+1));
+    [arr[i],arr[j]]=[arr[j],arr[i]];
+  }
+  return arr;
+}
+
+function assignText3D(text,colorFn,fontSize,spread){
+  const pts=shuffle(getTextPts(text,fontSize));
+  const sp=spread||60; // Z spread for 3D depth
+  isTextMode=true;
+  textLabel=text;
+  const needed=Math.min(pts.length,TOTAL);
+  for(let i=0;i<TOTAL;i++){
+    if(i<needed){
+      particles[i].tx=pts[i].x;
+      particles[i].ty=pts[i].y;
+      // Give each particle a unique Z based on position + noise — makes it look 3D
+      const zNoise=(Math.sin(pts[i].x*0.05)*Math.cos(pts[i].y*0.05))*sp
+                  +(Math.random()-0.5)*sp*0.5;
+      particles[i].tz=zNoise;
+      particles[i].hasTarget=true;
+      particles[i].col=colorFn(i,pts[i]);
+      particles[i].sz=Math.random()*1.0+0.5;
+    } else {
+      particles[i].hasTarget=false;
+      particles[i].tx=null;particles[i].ty=null;particles[i].tz=null;
+      particles[i].alpha=0;
+    }
+  }
+  // Set auto rotation for nice 3D reveal
+  targetRotX=0.18;
+  targetRotY=autoRotY;
+  autoRotY=0; // pause auto-rot while forming
+}
+
+function clearText(){
+  isTextMode=false;
+  textLabel='';
+  particles.forEach(p=>{
+    p.hasTarget=false;
+    p.tx=null;p.ty=null;p.tz=null;
+    p.vx=(Math.random()-0.5)*4;
+    p.vy=(Math.random()-0.5)*4;
+    p.vz=(Math.random()-0.5)*4;
+  });
+  targetRotX=0.25;
+}
+
+const colors={
+  peace:(i,pt)=>{
+    const h=185+pt.x*0.08+pt.y*0.06;
+    return `hsl(${h},100%,${60+Math.sin(i*0.1)*12}%)`;
+  },
+  pinky:(i,pt)=>{
+    const h=290+pt.x*0.1;
+    return `hsl(${h},100%,${60+Math.sin(i*0.12)*15}%)`;
+  },
+  signN:(i,pt)=>{
+    const h=35+pt.x*0.05;
+    return `hsl(${h},100%,${58+Math.sin(i*0.08)*12}%)`;
+  },
+  signO:(i,pt)=>{
+    const h=130+pt.y*0.06;
+    return `hsl(${h},100%,${58+Math.sin(i*0.1)*12}%)`;
+  },
+  smile:(i,pt)=>{
+    const h=330+pt.x*0.04;
+    return `hsl(${h},100%,${62+Math.sin(i*0.1)*12}%)`;
+  },
+};
+
+const gInfo={
+  open:['Open hand','partikel meledak 3D!'],
+  fist:['Fist','vortex 3D spin'],
+  peace:['Peace — I LOVE YOU','tulisan 3D mengikuti tangan'],
+  point:['Point','tarik partikel'],
+  pinky:['Kelingking','INANG 3D'],
+  signN:['Isyarat N','NURU MUTMAINNAH 3D'],
+  signO:['Isyarat O','ODGJ WKWKWK 3D'],
+  smile:['Wajah senang','SEMOGA HARIMU MENYENANGKAN 3D'],
+  none:['Belum ada tangan','tunjukkan tanganmu'],
+};
+
+function setUI(g){
+  const gl=gInfo[g]||gInfo.none;
+  document.getElementById('gname').textContent=gl[0];
+  document.getElementById('gdesc').textContent=gl[1];
+  document.getElementById('gmod').textContent=g;
+}
+
+function classifyGesture(lm){
+  const tips=[8,12,16,20],mcp=[6,10,14,18];
+  const ext=tips.map((t,i)=>lm[t].y<lm[mcp[i]].y);
+  const thumbOpen=Math.abs(lm[4].x-lm[3].x)>0.06;
+  const [i0,i1,i2,i3]=ext;
+  const numExt=ext.filter(Boolean).length;
+  if(!i0&&!i1&&!i2&&i3&&!thumbOpen) return 'pinky';
+  const distTO=Math.hypot(lm[4].x-lm[8].x,lm[4].y-lm[8].y);
+  if(distTO<0.07&&!i1&&!i2&&!i3) return 'signO';
+  if(!i0&&!i1&&i2&&i3&&thumbOpen) return 'signO';
+  if(i0&&!i1&&!i2&&i3&&!thumbOpen) return 'signN';
+  if(numExt===0) return 'fist';
+  if(i0&&!i1&&!i2&&!i3) return 'point';
+  if(i0&&i1&&!i2&&!i3) return 'peace';
+  if(numExt>=3&&thumbOpen) return 'open';
+  return 'open';
+}
+
+function getHandAngle(lm){
+  return Math.atan2(lm[9].y-lm[0].y,(1-lm[9].x)-(1-lm[0].x));
+}
+
+function drawLM(lm){
+  hCtx.clearRect(0,0,130,73);
+  const conn=[[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+  hCtx.strokeStyle='rgba(0,229,255,0.45)';
+  hCtx.lineWidth=1;
+  for(const [a,b] of conn){
+    hCtx.beginPath();
+    hCtx.moveTo((1-lm[a].x)*130,lm[a].y*73);
+    hCtx.lineTo((1-lm[b].x)*130,lm[b].y*73);
+    hCtx.stroke();
+  }
+  for(const p of lm){
+    hCtx.fillStyle='#00e5ff';
+    hCtx.beginPath();
+    hCtx.arc((1-p.x)*130,p.y*73,1.8,0,Math.PI*2);
+    hCtx.fill();
+  }
+}
+
+function resize(){
+  const c=document.getElementById('cvs-wrap');
+  W=c.offsetWidth; H=c.offsetHeight;
+  pCvs.width=W; pCvs.height=H;
+}
+
+let lastT=0;
+function loop(ts){
+  const dt=Math.min((ts-lastT)/16,3); lastT=ts;
+  const g=gesture;
+  const isText=['peace','pinky','signN','signO','smile'].includes(g);
+
+  // Clear
+  ctx.clearRect(0,0,W,H);
+  if(!isText){
+    ctx.fillStyle='rgba(6,6,15,0.25)';
+    ctx.fillRect(0,0,W,H);
+  }
+
+  // Smooth rotation
+  if(isText){
+    // gentle auto-rotation so 3D is visible
+    autoRotY+=0.004*dt;
+    targetRotY=autoRotY;
+    targetRotX=0.18;
+    // Peace: tilt follows hand
+    if(g==='peace') targetRotZ=handAngle*0.6;
+    else targetRotZ=0;
+  } else {
+    targetRotX=0.0; targetRotY=0; targetRotZ=0;
+    autoRotY=rotY;
+  }
+  rotX+=(targetRotX-rotX)*0.04*dt;
+  rotY+=(targetRotY-rotY)*0.04*dt;
+  rotZ+=(targetRotZ-rotZ)*0.05*dt;
+
+  // Handle gesture change
+  if(g!==prevGesture){
+    if(isText){
+      if(g==='peace') assignText3D('I LOVE YOU',colors.peace,undefined,80);
+      else if(g==='pinky') assignText3D('INANG',colors.pinky,undefined,70);
+      else if(g==='signN') assignText3D('NURU MUTMAINNAH',colors.signN,Math.min(Math.floor(H*0.12),Math.floor(W/15)),60);
+      else if(g==='signO') assignText3D('ODGJ WKWKWK',colors.signO,undefined,65);
+      else if(g==='smile') assignText3D('SEMOGA HARIMU MENYENANGKAN',colors.smile,Math.min(Math.floor(H*0.10),Math.floor(W/26)),55);
+    } else {
+      clearText();
+    }
+    prevGesture=g;
+    setUI(g);
+  }
+
+  // Sort by projected Z for painter's algorithm
+  particles.forEach(p=>p.update(g));
+  particles.forEach(p=>p.project(rotX,rotY,rotZ));
+  particles.sort((a,b)=>a.projZ-b.projZ);
+  particles.forEach(p=>p.draw());
+  ctx.globalAlpha=1;
+  ctx.shadowBlur=0;
+
+  document.getElementById('pcnt').textContent=particles.filter(p=>p.alpha>0.05).length;
+  requestAnimationFrame(loop);
+}
+
+async function startCam(){
+  if(camOn)return;
+  const btn=document.getElementById('startBtn');
+  btn.disabled=true; btn.textContent='Loading...';
+  stEl.textContent='starting...';
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia({video:{width:320,height:180,facingMode:'user'}});
+    vid.srcObject=stream; await vid.play();
+    camOn=true; stEl.textContent='kamera on'; btn.textContent='Kamera On';
+    resize(); initParticles(); requestAnimationFrame(loop);
+    initMP();
+  }catch(e){
+    btn.disabled=false; btn.textContent='Mulai Kamera';
+    stEl.textContent='demo mode';
+    resize(); initParticles(); requestAnimationFrame(loop); demoMode();
+  }
+}
+
+function initMP(){
+  if(typeof Hands==='undefined'){demoMode();return;}
+  const hands=new Hands({locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1646424915/${f}`});
+  hands.setOptions({maxNumHands:1,modelComplexity:0,minDetectionConfidence:0.6,minTrackingConfidence:0.5});
+  hands.onResults(r=>{
+    if(r.multiHandLandmarks&&r.multiHandLandmarks.length>0){
+      const lm=r.multiHandLandmarks[0];
+      handPos={x:1-lm[9].x,y:lm[9].y};
+      handAngle=getHandAngle(lm);
+      gesture=classifyGesture(lm);
+      drawLM(lm);
+    }else{
+      handPos=null; gesture='none';
+      hCtx.clearRect(0,0,130,73);
+    }
+  });
+
+  if(typeof FaceMesh!=='undefined'){
+    const fm=new FaceMesh({locateFile:f=>`https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4.1633559619/${f}`});
+    fm.setOptions({maxNumFaces:1,refineLandmarks:false,minDetectionConfidence:0.5,minTrackingConfidence:0.5});
+    fm.onResults(fr=>{
+      if(fr.multiFaceLandmarks&&fr.multiFaceLandmarks.length>0){
+        const fl=fr.multiFaceLandmarks[0];
+        const mw=Math.abs(fl[291].x-fl[61].x);
+        if(mw>0.12&&gesture==='none') gesture='smile';
+        else if(mw<=0.12&&gesture==='smile') gesture='none';
+      }
+    });
+    let fc=0;
+    const cam=new Camera(vid,{
+      onFrame:async()=>{
+        await hands.send({image:vid});
+        fc++;
+        if(fc%3===0) await fm.send({image:vid});
+      },
+      width:320,height:180
+    });
+    cam.start();
+  } else {
+    const cam=new Camera(vid,{
+      onFrame:async()=>{ await hands.send({image:vid}); },
+      width:320,height:180
+    });
+    cam.start();
+  }
+}
+
+function demoMode(){
+  stEl.textContent='demo mode';
+  const seq=[
+    {g:'open'},{g:'fist'},{g:'peace'},{g:'peace'},
+    {g:'pinky'},{g:'signN'},{g:'signO'},{g:'smile'},{g:'point'},{g:'none'}
+  ];
+  let i=0;
+  setInterval(()=>{
+    const s=seq[i%seq.length];
+    gesture=s.g;
+    handAngle=Math.sin(i*0.8)*0.5;
+    handPos={x:0.45+Math.random()*0.1,y:0.45+Math.random()*0.1};
+    i++;
+  },3500);
+}
+
+window.addEventListener('resize',()=>resize());
+resize(); initParticles(); requestAnimationFrame(loop);
+</script>
+</body>
+</html>
